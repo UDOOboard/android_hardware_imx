@@ -48,6 +48,7 @@
 #include "config_cs42888.h"
 #include "config_wm8960.h"
 #include "config_sii902x.h"
+#include "config_vt1613.h"
 
 #ifdef BRILLO
 #define PCM_HW_PARAM_ACCESS 0
@@ -116,7 +117,9 @@
 #define PRODUCT_NAME_PROPERTY   "ro.product.name"
 #define PRODUCT_DEVICE_IMX      "imx"
 #define PRODUCT_DEVICE_AUTO     "sabreauto"
-#define SUPPORT_CARD_NUM        9
+#define SUPPORT_CARD_NUM        10
+
+#define AUDIO_CODEC_97
 
 /*"null_card" must be in the end of this array*/
 struct audio_card *audio_card_list[SUPPORT_CARD_NUM] = {
@@ -128,6 +131,7 @@ struct audio_card *audio_card_list[SUPPORT_CARD_NUM] = {
     &cs42888_card,
     &wm8960_card,
     &sii902x_card,
+    &vt1613_card,
     &null_card,
 };
 
@@ -1668,6 +1672,14 @@ static int start_input_stream(struct imx_stream_in *in)
         format     = adev_get_format_for_device(adev, in->device, PCM_IN);
         in->config.format  = format;
     }
+#ifdef AUDIO_CODEC_97
+        rate = adev_get_rate_for_device(adev, in->device, PCM_IN); //vt1613-audio card supports ONLY 48000 Hz sample rate for Capture!
+        if( rate == 0) {
+              ALOGW("can not get rate for in_device %d ", in->device);
+              return -EINVAL;
+        }
+        in->config.rate = rate;
+#endif
 
     ALOGW("card %d, port %d device 0x%x", card, port, in->device);
     ALOGW("rate %d, channel %d format %d, period_size 0x%x", in->config.rate, in->config.channels, 
@@ -3272,7 +3284,7 @@ static int scan_available_device(struct imx_audio_device *adev, bool rescanusb, 
     int left_out_devices = SUPPORTED_DEVICE_OUT_MODULE;
     int left_in_devices = SUPPORTED_DEVICE_IN_MODULE;
     int rate, channels, format;
-    /* open the mixer for main sound card, main sound cara is like sgtl5000, wm8958, cs428888*/
+    /* open the mixer for main sound card, main sound card is like sgtl5000, wm8958, cs428888*/
     /* note: some platform do not have main sound card, only have auxiliary card.*/
     /* max num of supported card is 2 */
     k = adev->audio_card_num;
