@@ -39,6 +39,7 @@
 #include <ctype.h>
 #include <cutils/properties.h>
 #include <stdlib.h>
+#include <hci_audio.h>
 #include "bt_hci_bdroid.h"
 #include "bt_vendor_brcm.h"
 #include "userial.h"

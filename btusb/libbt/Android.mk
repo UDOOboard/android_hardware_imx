@@ -4,7 +4,7 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 
-BDROID_DIR := $(TOP_DIR)external/bluetooth/bluedroid
+BDROID_DIR := $(TOP_DIR)system/bt
 
 LOCAL_SRC_FILES := \
         src/bt_vendor_brcm.c \
@@ -15,6 +15,8 @@ LOCAL_SRC_FILES := \
 
 LOCAL_C_INCLUDES += \
         $(LOCAL_PATH)/include \
+        $(BDROID_DIR)/include \
+        $(BDROID_DIR)/stack/include \
         $(BDROID_DIR)/hci/include
 
 LOCAL_SHARED_LIBRARIES := \
