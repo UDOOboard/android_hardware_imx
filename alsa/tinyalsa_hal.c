@@ -103,12 +103,12 @@
 /* minimum sleep time in out_write() when write threshold is not reached */
 #define MIN_WRITE_SLEEP_US 5000
 
-#define DEFAULT_OUT_SAMPLING_RATE 44100
+#define DEFAULT_OUT_SAMPLING_RATE 48000
 
 /* sampling rate when using MM low power port */
-#define MM_LOW_POWER_SAMPLING_RATE  44100
+#define MM_LOW_POWER_SAMPLING_RATE  48000
 /* sampling rate when using MM full power port */
-#define MM_FULL_POWER_SAMPLING_RATE 44100
+#define MM_FULL_POWER_SAMPLING_RATE 48000
 
 #define MM_USB_AUDIO_IN_RATE   16000
 
@@ -513,14 +513,26 @@ static void select_input_device(struct imx_audio_device *adev)
 static int get_card_for_device(struct imx_audio_device *adev, int device, unsigned int flag)
 {
     int card = -1;
+    struct pcm *pcmtest;
+    unsigned int port = 0;
 
     if (flag == PCM_OUT ) {
 	card = adev->card_list[out_dev_idx]->card;
+    	pcmtest = pcm_open(card, port, PCM_OUT | PCM_MONOTONIC, &pcm_config_mm_out);
+	if (pcmtest && !pcm_is_ready(pcmtest)) {
+           ALOGE("Error in opening %d device: %s", out_dev_idx, pcm_get_error(pcmtest));
+           ALOGE("Falling back to VT1613_AUDIO_CARD_IDX (%d) device.", VT1613_AUDIO_CARD_IDX);
+	   card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
+	}
+        pcm_close(pcmtest);
+        pcmtest = NULL;
     } else {
 	card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
     }
+
     return card;
 }
+
 /* must be called with hw device and output stream mutexes locked */
 static int start_output_stream_primary(struct imx_stream_out *out)
 {
@@ -587,7 +599,7 @@ static int start_output_stream_primary(struct imx_stream_out *out)
         }
 
         card = get_card_for_device(adev, pcm_device, PCM_OUT);
-        out->pcm[PCM_NORMAL] = pcm_open(card, port,out->write_flags[PCM_NORMAL], &out->config[PCM_NORMAL]);
+        out->pcm[PCM_NORMAL] = pcm_open(card, port, out->write_flags[PCM_NORMAL], &out->config[PCM_NORMAL]);
         ALOGW("card %d, port %d device 0x%x", card, port, out->device);
         ALOGW("rate %d, channel %d period_size 0x%x", out->config[PCM_NORMAL].rate, out->config[PCM_NORMAL].channels, out->config[PCM_NORMAL].period_size);
         success = true;
@@ -653,7 +665,6 @@ static int start_output_stream_hdmi(struct imx_stream_out *out)
         do_output_standby(p_out);
         pthread_mutex_unlock(&p_out->lock);
     }
-
     card = get_card_for_device(adev, out->device & AUDIO_DEVICE_OUT_AUX_DIGITAL, PCM_OUT);
     ALOGW("card %d, port %d device 0x%x", card, port, out->device);
     ALOGW("rate %d, channel %d period_size 0x%x", out->config[PCM_HDMI].rate, out->config[PCM_HDMI].channels, out->config[PCM_HDMI].period_size);
@@ -1604,6 +1615,7 @@ static int start_input_stream(struct imx_stream_in *in)
 {
     int ret = 0;
     int i;
+    struct pcm *pcmtest;
     struct imx_audio_device *adev = in->dev;
     unsigned int card = -1;
     unsigned int port = 0;
@@ -1618,6 +1630,7 @@ static int start_input_stream(struct imx_stream_in *in)
         select_input_device(adev);
     }
 
+#if 1
     for(i = 0; i < MAX_AUDIO_CARD_NUM; i++) {
         if(adev->in_device & adev->card_list[i]->supported_in_devices) {
             card = adev->card_list[i]->card;
@@ -1630,6 +1643,17 @@ static int start_input_stream(struct imx_stream_in *in)
             return -EINVAL;
         }
     }
+#endif
+
+    pcmtest = pcm_open(card, port, PCM_IN, &pcm_config_mm_in);
+    if (pcmtest && !pcm_is_ready(pcmtest)) {
+           ALOGE("Error in opening %d device: %s", adev->in_card_idx, pcm_get_error(pcmtest));
+           ALOGE("Falling back to VT1613_AUDIO_CARD_IDX (%d) device.", VT1613_AUDIO_CARD_IDX);
+	   card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
+           adev->in_card_idx = 0;
+    }
+    pcm_close(pcmtest);
+    pcmtest = NULL;
 
     /*Error handler for usb mic plug in/plug out when recording. */
     memcpy(&in->config, &pcm_config_mm_in, sizeof(pcm_config_mm_in));
@@ -1656,7 +1680,7 @@ static int start_input_stream(struct imx_stream_in *in)
     } else if (in->device & AUDIO_DEVICE_IN_AUX_DIGITAL) {
         format     = adev_get_format_for_device(adev, in->device, PCM_IN);
         in->config.format  = format;
-    }
+    }    
 #ifdef AUDIO_CODEC_97
         rate = adev_get_rate_for_device(adev, in->device, PCM_IN); //vt1613-audio card supports ONLY 48000 Hz sample rate for Capture!
         if( rate == 0) {
@@ -1666,11 +1690,11 @@ static int start_input_stream(struct imx_stream_in *in)
         in->config.rate = rate;
 #endif
 
-    ALOGW("card %d, port %d device 0x%x", card, port, in->device);
-    ALOGW("rate %d, channel %d format %d, period_size 0x%x", in->config.rate, in->config.channels,
-                                 in->config.format, in->config.period_size);
+    ALOGW("card %d, port %d device 0x%x  [%d]", card, port, in->device, PCM_FORMAT_S16_LE);
+    ALOGW("rate %d, channel %d format %d, period_size 0x%x [%d]", in->config.rate, in->config.channels,
+                                 in->config.format, in->config.period_size, in->config.period_size);
 
-    if (in->need_echo_reference && in->echo_reference == NULL)
+    if (in->need_echo_reference && in->echo_reference == NULL) 
         in->echo_reference = get_echo_reference(adev,
                                         AUDIO_FORMAT_PCM_16_BIT,
                                         in->requested_channel,
@@ -1679,7 +1703,9 @@ static int start_input_stream(struct imx_stream_in *in)
     /* this assumes routing is done previously */
     in->pcm = pcm_open(card, port, PCM_IN, &in->config);
     if (!pcm_is_ready(in->pcm)) {
-        ALOGE("cannot open pcm_in driver: %s", pcm_get_error(in->pcm));
+        ALOGE("Device is busy. Cannot open pcm_in driver: %s", pcm_get_error(in->pcm));
+        ALOGE("Waiting 500 msec before next retries.");
+        usleep(500000);
         pcm_close(in->pcm);
         /*workaround for some usb camera (V-UBM46). the issue is that:
           open camerarecorder,recording, suspend, resumed, recording. sometimes the audio input
@@ -3097,7 +3123,6 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
     struct imx_audio_device *ladev = (struct imx_audio_device *)dev;
     struct imx_stream_in *in;
     int ret;
-    int rate, channels;
     int channel_count = popcount(config->channel_mask);
 
     if (check_input_parameters(config->sample_rate, config->format, channel_count) != 0)
