@@ -28,6 +28,11 @@ LOCAL_C_INCLUDES += \
 	system/media/audio_effects/include
 LOCAL_SHARED_LIBRARIES := liblog libcutils libtinyalsa libaudioutils libdl
 LOCAL_MODULE_TAGS := optional
+ifeq ($(PRODUCT_MODEL),A62-MX6DQ)
+LOCAL_CFLAGS += -DA62
+else ifeq ($(strip $(PRODUCT_MODEL)),UDOO-MX6DQ)
+LOCAL_CFLAGS += -DUDOO
+endif
 include $(BUILD_SHARED_LIBRARY)
 
 endif
@@ -48,6 +53,7 @@ LOCAL_C_INCLUDES += \
 LOCAL_SHARED_LIBRARIES := liblog libcutils libtinyalsa libaudioutils libdl
 LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS += -DBRILLO
+
 include $(BUILD_SHARED_LIBRARY)
 
 endif
