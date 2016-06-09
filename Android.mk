@@ -6,6 +6,8 @@ mx7_dirs := $(common_imx_dirs) alsa mx6/power mx7/gralloc mx7/hwcomposer
 ifeq ($(TARGET_BOARD_PLATFORM),imx6)
   ifeq ($(IMX_CAMERA_HAL_V2),true)
     mx6_dirs += mx6/libcamera2
+  else ifeq ($(IMX_CAMERA_HAL_V3),true)
+    mx6_dirs += mx6/libcamera3
   else
     mx6_dirs += mx6/libcamera
   endif
