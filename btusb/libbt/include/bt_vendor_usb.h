@@ -18,7 +18,7 @@
 
 /******************************************************************************
  *
- *  Filename:      bt_vendor_brcm.h
+ *  Filename:      bt_vendor_usb.h
  *
  *  Description:   A wrapper header file of bt_vendor_lib.h
  *
@@ -27,8 +27,8 @@
  *
  ******************************************************************************/
 
-#ifndef BT_VENDOR_BRCM_H
-#define BT_VENDOR_BRCM_H
+#ifndef BT_VENDOR_USB_H
+#define BT_VENDOR_USB_H
 
 #include "bt_vendor_lib.h"
 #include "vnd_buildcfg.h"
@@ -96,6 +96,7 @@
  *  !!! WARNING !!! Make sure that the OTP feature has been enabled in the
  *  firmware patchram (.hcd) file.
  */
+#define USE_CONTROLLER_BDADDR   TRUE
 #ifndef USE_CONTROLLER_BDADDR
 #define USE_CONTROLLER_BDADDR   FALSE
 #endif
@@ -222,12 +223,12 @@
 #define  BT_WAKE_VIA_PROC_NOTIFY_DEASSERT       FALSE
 #endif
 
-/* N_BRCM_HCI
+/* N_USB_HCI
 
     UART ioctl line discipline
 */
-#ifndef N_BRCM_HCI
-#define N_BRCM_HCI             25
+#ifndef N_USB_HCI
+#define N_USB_HCI             25
 #endif
 
 /* SCO_CFG_INCLUDED
@@ -426,5 +427,5 @@ extern bt_vendor_callbacks_t *bt_vendor_cbacks;
 
 extern int hw_set_audio_state(bt_vendor_op_audio_state_t *p_state);
 
-#endif /* BT_VENDOR_BRCM_H */
+#endif /* BT_VENDOR_USB_H */
 

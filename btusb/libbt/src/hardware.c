@@ -41,9 +41,7 @@
 #include <stdlib.h>
 #include <hci_audio.h>
 #include "bt_hci_bdroid.h"
-#include "bt_vendor_brcm.h"
-#include "userial.h"
-#include "userial_vendor.h"
+#include "bt_vendor_usb.h"
 #include "upio.h"
 
 /******************************************************************************
@@ -68,7 +66,6 @@
 #define HCI_CMD_MAX_LEN             258
 
 #define HCI_RESET                               0x0C03
-#define HCI_VSC_WRITE_UART_CLOCK_SETTING        0xFC45
 #define HCI_VSC_UPDATE_BAUDRATE                 0xFC18
 #define HCI_READ_LOCAL_NAME                     0x0C14
 #define HCI_VSC_DOWNLOAD_MINIDRV                0xFC2E
@@ -98,13 +95,6 @@
 #define UINT16_TO_STREAM(p, u16) {*(p)++ = (uint8_t)(u16); *(p)++ = (uint8_t)((u16) >> 8);}
 #define UINT32_TO_STREAM(p, u32) {*(p)++ = (uint8_t)(u32); *(p)++ = (uint8_t)((u32) >> 8); *(p)++ = (uint8_t)((u32) >> 16); *(p)++ = (uint8_t)((u32) >> 24);}
 
-#define SCO_INTERFACE_PCM  0
-#define SCO_INTERFACE_I2S  1
-
-/* one byte is for enable/disable
-      next 2 bytes are for codec type */
-#define SCO_CODEC_PARAM_SIZE                    3
-
 /******************************************************************************
 **  Local type definitions
 ******************************************************************************/
@@ -112,12 +102,12 @@
 /* Hardware Configuration State */
 enum {
     HW_CFG_START = 1,
-    HW_CFG_SET_UART_CLOCK,
-    HW_CFG_SET_UART_BAUD_1,
+    HW_CFG_NOT_USED,
+    HW_CFG_NOT_USED_1,
     HW_CFG_READ_LOCAL_NAME,
     HW_CFG_DL_MINIDRIVER,
     HW_CFG_DL_FW_PATCH,
-    HW_CFG_SET_UART_BAUD_2,
+    HW_CFG_NOT_USED_2,
     HW_CFG_SET_BD_ADDR
 #if (USE_CONTROLLER_BDADDR == TRUE)
     , HW_CFG_READ_BD_ADDR
@@ -194,125 +184,19 @@ static bt_lpm_param_t lpm_param =
     LPM_PULSED_HOST_WAKE
 };
 
-/* need to update the bt_sco_i2spcm_param as well
-   bt_sco_i2spcm_param will be used for WBS setting
-   update the bt_sco_param and bt_sco_i2spcm_param */
-static uint8_t bt_sco_param[SCO_PCM_PARAM_SIZE] =
-{
-    SCO_PCM_ROUTING,
-    SCO_PCM_IF_CLOCK_RATE,
-    SCO_PCM_IF_FRAME_TYPE,
-    SCO_PCM_IF_SYNC_MODE,
-    SCO_PCM_IF_CLOCK_MODE
-};
+int memcmp(const void *str1, const void *str2, size_t n);
+void *memcpy(void *str1, const void *str2, size_t n);
+void *memset(void *str, int c, size_t n);
+size_t strlen(const char *str);
+char *strcpy(char *dest, const char *src);
+char *strncpy(char *dest, const char *src, size_t n);
+char *strstr(const char *haystack, const char *needle);
+char *strcat(char *dest, const char *src);
 
-static uint8_t bt_pcm_data_fmt_param[PCM_DATA_FORMAT_PARAM_SIZE] =
-{
-    PCM_DATA_FMT_SHIFT_MODE,
-    PCM_DATA_FMT_FILL_BITS,
-    PCM_DATA_FMT_FILL_METHOD,
-    PCM_DATA_FMT_FILL_NUM,
-    PCM_DATA_FMT_JUSTIFY_MODE
-};
-
-static uint8_t bt_sco_i2spcm_param[SCO_I2SPCM_PARAM_SIZE] =
-{
-    SCO_I2SPCM_IF_MODE,
-    SCO_I2SPCM_IF_ROLE,
-    SCO_I2SPCM_IF_SAMPLE_RATE,
-    SCO_I2SPCM_IF_CLOCK_RATE
-};
-
-/*
- * The look-up table of recommended firmware settlement delay (milliseconds) on
- * known chipsets.
- */
-static const fw_settlement_entry_t fw_settlement_table[] = {
-    {"BCM43241", 200},
-    {"BCM43341", 100},
-    {(const char *) NULL, 100}  // Giving the generic fw settlement delay setting.
-};
-
-
-/*
- * NOTICE:
- *     If the platform plans to run I2S interface bus over I2S/PCM port of the
- *     BT Controller with the Host AP, explicitly set "SCO_USE_I2S_INTERFACE = TRUE"
- *     in the correspodning include/vnd_<target>.txt file.
- *     Otherwise, leave SCO_USE_I2S_INTERFACE undefined in the vnd_<target>.txt file.
- *     And, PCM interface will be set as the default bus format running over I2S/PCM
- *     port.
- */
-#if (defined(SCO_USE_I2S_INTERFACE) && SCO_USE_I2S_INTERFACE == TRUE)
-static uint8_t sco_bus_interface = SCO_INTERFACE_I2S;
-#else
-static uint8_t sco_bus_interface = SCO_INTERFACE_PCM;
-#endif
-
-#define INVALID_SCO_CLOCK_RATE  0xFF
-static uint8_t sco_bus_clock_rate = INVALID_SCO_CLOCK_RATE;
-static uint8_t sco_bus_wbs_clock_rate = INVALID_SCO_CLOCK_RATE;
-
-/******************************************************************************
-**  Static functions
-******************************************************************************/
-static void hw_sco_i2spcm_config(void *p_mem, uint16_t codec);
 
 /******************************************************************************
 **  Controller Initialization Static Functions
 ******************************************************************************/
-
-/*******************************************************************************
-**
-** Function        look_up_fw_settlement_delay
-**
-** Description     If FW_PATCH_SETTLEMENT_DELAY_MS has not been explicitly
-**                 re-defined in the platform specific build-time configuration
-**                 file, we will search into the look-up table for a
-**                 recommended firmware settlement delay value.
-**
-**                 Although the settlement time might be also related to board
-**                 configurations such as the crystal clocking speed.
-**
-** Returns         Firmware settlement delay
-**
-*******************************************************************************/
-uint32_t look_up_fw_settlement_delay (void)
-{
-    uint32_t ret_value;
-    fw_settlement_entry_t *p_entry;
-
-    if (FW_PATCH_SETTLEMENT_DELAY_MS > 0)
-    {
-        ret_value = FW_PATCH_SETTLEMENT_DELAY_MS;
-    }
-#if (VENDOR_LIB_RUNTIME_TUNING_ENABLED == TRUE)
-    else if (fw_patch_settlement_delay >= 0)
-    {
-        ret_value = fw_patch_settlement_delay;
-    }
-#endif
-    else
-    {
-        p_entry = (fw_settlement_entry_t *)fw_settlement_table;
-
-        while (p_entry->chipset_name != NULL)
-        {
-            if (strstr(hw_cfg_cb.local_chip_name, p_entry->chipset_name)!=NULL)
-            {
-                break;
-            }
-
-            p_entry++;
-        }
-
-        ret_value = p_entry->delay_time;
-    }
-
-    BTHWDBG( "Settlement delay -- %d ms", ret_value);
-
-    return (ret_value);
-}
 
 /*******************************************************************************
 **
@@ -339,56 +223,6 @@ void ms_delay (uint32_t timeout)
         err = nanosleep(&delay, &delay);
     } while (err < 0 && errno ==EINTR);
 }
-
-/*******************************************************************************
-**
-** Function        line_speed_to_userial_baud
-**
-** Description     helper function converts line speed number into USERIAL baud
-**                 rate symbol
-**
-** Returns         unit8_t (USERIAL baud symbol)
-**
-*******************************************************************************/
-uint8_t line_speed_to_userial_baud(uint32_t line_speed)
-{
-    uint8_t baud;
-
-    if (line_speed == 4000000)
-        baud = USERIAL_BAUD_4M;
-    else if (line_speed == 3000000)
-        baud = USERIAL_BAUD_3M;
-    else if (line_speed == 2000000)
-        baud = USERIAL_BAUD_2M;
-    else if (line_speed == 1000000)
-        baud = USERIAL_BAUD_1M;
-    else if (line_speed == 921600)
-        baud = USERIAL_BAUD_921600;
-    else if (line_speed == 460800)
-        baud = USERIAL_BAUD_460800;
-    else if (line_speed == 230400)
-        baud = USERIAL_BAUD_230400;
-    else if (line_speed == 115200)
-        baud = USERIAL_BAUD_115200;
-    else if (line_speed == 57600)
-        baud = USERIAL_BAUD_57600;
-    else if (line_speed == 19200)
-        baud = USERIAL_BAUD_19200;
-    else if (line_speed == 9600)
-        baud = USERIAL_BAUD_9600;
-    else if (line_speed == 1200)
-        baud = USERIAL_BAUD_1200;
-    else if (line_speed == 600)
-        baud = USERIAL_BAUD_600;
-    else
-    {
-        ALOGE( "userial vendor: unsupported baud speed %d", line_speed);
-        baud = USERIAL_BAUD_115200;
-    }
-
-    return baud;
-}
-
 
 /*******************************************************************************
 **
@@ -625,6 +459,7 @@ void hw_config_cback(void *p_mem)
     const uint8_t null_bdaddr[BD_ADDR_LEN] = {0,0,0,0,0,0};
 #endif
 
+
     status = *((uint8_t *)(p_evt_buf + 1) + HCI_EVT_CMD_CMPL_STATUS_RET_BYTE);
     p = (uint8_t *)(p_evt_buf + 1) + HCI_EVT_CMD_CMPL_OPCODE;
     STREAM_TO_UINT16(opcode,p);
@@ -645,24 +480,6 @@ void hw_config_cback(void *p_mem)
 
         switch (hw_cfg_cb.state)
         {
-            case HW_CFG_SET_UART_BAUD_1:
-                /* update baud rate of host's UART port */
-                ALOGI("bt vendor lib: set UART baud %i", UART_TARGET_BAUD_RATE);
-                userial_vendor_set_baud( \
-                    line_speed_to_userial_baud(UART_TARGET_BAUD_RATE) \
-                );
-
-                /* read local name */
-                UINT16_TO_STREAM(p, HCI_READ_LOCAL_NAME);
-                *p = 0; /* parameter length */
-
-                p_buf->len = HCI_CMD_PREAMBLE_SIZE;
-                hw_cfg_cb.state = HW_CFG_READ_LOCAL_NAME;
-
-                is_proceeding = bt_vendor_cbacks->xmit_cb(HCI_READ_LOCAL_NAME, \
-                                                    p_buf, hw_config_cback);
-                break;
-
             case HW_CFG_READ_LOCAL_NAME:
                 p_tmp = p_name = (char *) (p_evt_buf + 1) + \
                          HCI_EVT_CMD_CMPL_LOCAL_NAME_STRING;
@@ -715,71 +532,11 @@ void hw_config_cback(void *p_mem)
 
                 if (is_proceeding == FALSE)
                 {
-#if (BLUETOOTH_HCI_USE_USB == TRUE)
 		    is_proceeding = hw_config_read_bdaddr(p_buf);
-#else
-		    is_proceeding = hw_config_set_bdaddr(p_buf);
-#endif
                 }
-                break;
-
-            case HW_CFG_DL_MINIDRIVER:
-                /* give time for placing firmware in download mode */
-                ms_delay(50);
-                hw_cfg_cb.state = HW_CFG_DL_FW_PATCH;
-                /* fall through intentionally */
-            case HW_CFG_DL_FW_PATCH:
-                p_buf->len = read(hw_cfg_cb.fw_fd, p, HCI_CMD_PREAMBLE_SIZE);
-                if (p_buf->len > 0)
-                {
-                    if ((p_buf->len < HCI_CMD_PREAMBLE_SIZE) || \
-                        (opcode == HCI_VSC_LAUNCH_RAM))
-                    {
-                        ALOGW("firmware patch file might be altered!");
-                    }
-                    else
-                    {
-                        p_buf->len += read(hw_cfg_cb.fw_fd, \
-                                           p+HCI_CMD_PREAMBLE_SIZE,\
-                                           *(p+HCD_REC_PAYLOAD_LEN_BYTE));
-                        STREAM_TO_UINT16(opcode,p);
-                        is_proceeding = bt_vendor_cbacks->xmit_cb(opcode, \
-                                                p_buf, hw_config_cback);
-                        break;
-                    }
-                }
-
-                close(hw_cfg_cb.fw_fd);
-                hw_cfg_cb.fw_fd = -1;
-
-                /* Normally the firmware patch configuration file
-                 * sets the new starting baud rate at 115200.
-                 * So, we need update host's baud rate accordingly.
-                 */
-                ALOGI("bt vendor lib: set UART baud 115200");
-                userial_vendor_set_baud(USERIAL_BAUD_115200);
-
-                /* Next, we would like to boost baud rate up again
-                 * to desired working speed.
-                 */
-                hw_cfg_cb.f_set_baud_2 = TRUE;
-
-                /* Check if we need to pause a few hundred milliseconds
-                 * before sending down any HCI command.
-                 */
-                delay = look_up_fw_settlement_delay();
-                ALOGI("Setting fw settlement delay to %d ", delay);
-                ms_delay(delay);
-
-                p_buf->len = HCI_CMD_PREAMBLE_SIZE;
-                UINT16_TO_STREAM(p, HCI_RESET);
-                *p = 0; /* parameter length */
-                hw_cfg_cb.state = HW_CFG_START;
-                is_proceeding = bt_vendor_cbacks->xmit_cb(HCI_RESET, p_buf, hw_config_cback);
                 break;
 
             case HW_CFG_START:
-#if (BLUETOOTH_HCI_USE_USB == TRUE)
 		/* read local name */
 		UINT16_TO_STREAM(p, HCI_READ_LOCAL_NAME);
 		*p = 0; /* parameter length */
@@ -790,55 +547,8 @@ void hw_config_cback(void *p_mem)
 		is_proceeding = bt_vendor_cbacks->xmit_cb(HCI_READ_LOCAL_NAME, \
 		p_buf, hw_config_cback);
 		break;
-#endif		      
-                if (UART_TARGET_BAUD_RATE > 3000000)
-                {
-                    /* set UART clock to 48MHz */
-                    UINT16_TO_STREAM(p, HCI_VSC_WRITE_UART_CLOCK_SETTING);
-                    *p++ = 1; /* parameter length */
-                    *p = 1; /* (1,"UART CLOCK 48 MHz")(2,"UART CLOCK 24 MHz") */
-
-                    p_buf->len = HCI_CMD_PREAMBLE_SIZE + 1;
-                    hw_cfg_cb.state = HW_CFG_SET_UART_CLOCK;
-
-                    is_proceeding = bt_vendor_cbacks->xmit_cb( \
-                                        HCI_VSC_WRITE_UART_CLOCK_SETTING, \
-                                        p_buf, hw_config_cback);
-                    break;
-                }
                 /* fall through intentionally */
-            case HW_CFG_SET_UART_CLOCK:
-                /* set controller's UART baud rate to 3M */
-                UINT16_TO_STREAM(p, HCI_VSC_UPDATE_BAUDRATE);
-                *p++ = UPDATE_BAUDRATE_CMD_PARAM_SIZE; /* parameter length */
-                *p++ = 0; /* encoded baud rate */
-                *p++ = 0; /* use encoded form */
-                UINT32_TO_STREAM(p, UART_TARGET_BAUD_RATE);
 
-                p_buf->len = HCI_CMD_PREAMBLE_SIZE + \
-                             UPDATE_BAUDRATE_CMD_PARAM_SIZE;
-                hw_cfg_cb.state = (hw_cfg_cb.f_set_baud_2) ? \
-                            HW_CFG_SET_UART_BAUD_2 : HW_CFG_SET_UART_BAUD_1;
-
-                is_proceeding = bt_vendor_cbacks->xmit_cb(HCI_VSC_UPDATE_BAUDRATE, \
-                                                    p_buf, hw_config_cback);
-                break;
-
-            case HW_CFG_SET_UART_BAUD_2:
-                /* update baud rate of host's UART port */
-                ALOGI("bt vendor lib: set UART baud %i", UART_TARGET_BAUD_RATE);
-                userial_vendor_set_baud( \
-                    line_speed_to_userial_baud(UART_TARGET_BAUD_RATE) \
-                );
-
-#if (USE_CONTROLLER_BDADDR == TRUE)
-                if ((is_proceeding = hw_config_read_bdaddr(p_buf)) == TRUE)
-                    break;
-#else
-                if ((is_proceeding = hw_config_set_bdaddr(p_buf)) == TRUE)
-                    break;
-#endif
-                /* fall through intentionally */
             case HW_CFG_SET_BD_ADDR:
                 ALOGI("vendor lib fwcfg completed");
                 bt_vendor_cbacks->dealloc(p_buf);
@@ -947,155 +657,6 @@ void hw_lpm_ctrl_cback(void *p_mem)
     }
 }
 
-
-#if (SCO_CFG_INCLUDED == TRUE)
-/*****************************************************************************
-**   SCO Configuration Static Functions
-*****************************************************************************/
-
-/*******************************************************************************
-**
-** Function         hw_sco_i2spcm_cfg_cback
-**
-** Description      Callback function for SCO I2S/PCM configuration rquest
-**
-** Returns          None
-**
-*******************************************************************************/
-static void hw_sco_i2spcm_cfg_cback(void *p_mem)
-{
-    HC_BT_HDR   *p_evt_buf = (HC_BT_HDR *)p_mem;
-    uint8_t     *p;
-    uint16_t    opcode;
-    HC_BT_HDR   *p_buf = NULL;
-    bt_vendor_op_result_t status = BT_VND_OP_RESULT_FAIL;
-
-    p = (uint8_t *)(p_evt_buf + 1) + HCI_EVT_CMD_CMPL_OPCODE;
-    STREAM_TO_UINT16(opcode,p);
-
-    if (*((uint8_t *)(p_evt_buf + 1) + HCI_EVT_CMD_CMPL_STATUS_RET_BYTE) == 0)
-    {
-        status = BT_VND_OP_RESULT_SUCCESS;
-    }
-
-    /* Free the RX event buffer */
-    if (bt_vendor_cbacks)
-        bt_vendor_cbacks->dealloc(p_evt_buf);
-
-    if (status == BT_VND_OP_RESULT_SUCCESS)
-    {
-        if ((opcode == HCI_VSC_WRITE_I2SPCM_INTERFACE_PARAM) &&
-            (SCO_INTERFACE_PCM == sco_bus_interface))
-        {
-            uint8_t ret = FALSE;
-
-            /* Ask a new buffer to hold WRITE_SCO_PCM_INT_PARAM command */
-            if (bt_vendor_cbacks)
-                p_buf = (HC_BT_HDR *)bt_vendor_cbacks->alloc(
-                        BT_HC_HDR_SIZE + HCI_CMD_PREAMBLE_SIZE + SCO_PCM_PARAM_SIZE);
-            if (p_buf)
-            {
-                p_buf->event = MSG_STACK_TO_HC_HCI_CMD;
-                p_buf->offset = 0;
-                p_buf->layer_specific = 0;
-                p_buf->len = HCI_CMD_PREAMBLE_SIZE + SCO_PCM_PARAM_SIZE;
-                p = (uint8_t *)(p_buf + 1);
-
-                /* do we need this VSC for I2S??? */
-                UINT16_TO_STREAM(p, HCI_VSC_WRITE_SCO_PCM_INT_PARAM);
-                *p++ = SCO_PCM_PARAM_SIZE;
-                memcpy(p, &bt_sco_param, SCO_PCM_PARAM_SIZE);
-                ALOGI("SCO PCM configure {0x%x, 0x%x, 0x%x, 0x%x, 0x%x}",
-                        bt_sco_param[0], bt_sco_param[1], bt_sco_param[2], bt_sco_param[3],
-                        bt_sco_param[4]);
-                if ((ret = bt_vendor_cbacks->xmit_cb(HCI_VSC_WRITE_SCO_PCM_INT_PARAM, p_buf,
-                        hw_sco_i2spcm_cfg_cback)) == FALSE)
-                {
-                    bt_vendor_cbacks->dealloc(p_buf);
-                }
-                else
-                    return;
-            }
-            status = BT_VND_OP_RESULT_FAIL;
-        }
-        else if ((opcode == HCI_VSC_WRITE_SCO_PCM_INT_PARAM) &&
-                 (SCO_INTERFACE_PCM == sco_bus_interface))
-        {
-            uint8_t ret = FALSE;
-
-            /* Ask a new buffer to hold WRITE_PCM_DATA_FORMAT_PARAM command */
-            if (bt_vendor_cbacks)
-                p_buf = (HC_BT_HDR *)bt_vendor_cbacks->alloc(
-                        BT_HC_HDR_SIZE + HCI_CMD_PREAMBLE_SIZE + PCM_DATA_FORMAT_PARAM_SIZE);
-            if (p_buf)
-            {
-                p_buf->event = MSG_STACK_TO_HC_HCI_CMD;
-                p_buf->offset = 0;
-                p_buf->layer_specific = 0;
-                p_buf->len = HCI_CMD_PREAMBLE_SIZE + PCM_DATA_FORMAT_PARAM_SIZE;
-
-                p = (uint8_t *)(p_buf + 1);
-                UINT16_TO_STREAM(p, HCI_VSC_WRITE_PCM_DATA_FORMAT_PARAM);
-                *p++ = PCM_DATA_FORMAT_PARAM_SIZE;
-                memcpy(p, &bt_pcm_data_fmt_param, PCM_DATA_FORMAT_PARAM_SIZE);
-
-                ALOGI("SCO PCM data format {0x%x, 0x%x, 0x%x, 0x%x, 0x%x}",
-                        bt_pcm_data_fmt_param[0], bt_pcm_data_fmt_param[1],
-                        bt_pcm_data_fmt_param[2], bt_pcm_data_fmt_param[3],
-                        bt_pcm_data_fmt_param[4]);
-
-                if ((ret = bt_vendor_cbacks->xmit_cb(HCI_VSC_WRITE_PCM_DATA_FORMAT_PARAM,
-                        p_buf, hw_sco_i2spcm_cfg_cback)) == FALSE)
-                {
-                    bt_vendor_cbacks->dealloc(p_buf);
-                }
-                else
-                    return;
-            }
-            status = BT_VND_OP_RESULT_FAIL;
-        }
-    }
-
-    ALOGI("sco I2S/PCM config result %d [0-Success, 1-Fail]", status);
-    if (bt_vendor_cbacks)
-    {
-        bt_vendor_cbacks->audio_state_cb(status);
-    }
-}
-
-/*******************************************************************************
-**
-** Function         hw_set_MSBC_codec_cback
-**
-** Description      Callback function for setting WBS codec
-**
-** Returns          None
-**
-*******************************************************************************/
-static void hw_set_MSBC_codec_cback(void *p_mem)
-{
-    /* whenever update the codec enable/disable, need to update I2SPCM */
-    ALOGI("SCO I2S interface change the sample rate to 16K");
-    hw_sco_i2spcm_config(p_mem, SCO_CODEC_MSBC);
-}
-
-/*******************************************************************************
-**
-** Function         hw_set_CVSD_codec_cback
-**
-** Description      Callback function for setting NBS codec
-**
-** Returns          None
-**
-*******************************************************************************/
-static void hw_set_CVSD_codec_cback(void *p_mem)
-{
-    /* whenever update the codec enable/disable, need to update I2SPCM */
-    ALOGI("SCO I2S interface change the sample rate to 8K");
-    hw_sco_i2spcm_config(p_mem, SCO_CODEC_CVSD);
-}
-
-#endif // SCO_CFG_INCLUDED
 
 /*****************************************************************************
 **   Hardware Configuration Interface Functions
@@ -1227,10 +788,7 @@ uint32_t hw_lpm_get_idle_timeout(void)
     timeout_ms = (uint32_t)lpm_param.host_stack_idle_threshold \
                             * LPM_IDLE_TIMEOUT_MULTIPLE;
 
-    if (strstr(hw_cfg_cb.local_chip_name, "BCM4325") != NULL)
         timeout_ms *= 25; // 12.5 or 25 ?
-    else
-        timeout_ms *= 300;
 
     return timeout_ms;
 }
@@ -1249,284 +807,6 @@ void hw_lpm_set_wake_state(uint8_t wake_assert)
     uint8_t state = (wake_assert) ? UPIO_ASSERT : UPIO_DEASSERT;
 
     upio_set(UPIO_BT_WAKE, state, lpm_param.bt_wake_polarity);
-}
-
-#if (SCO_CFG_INCLUDED == TRUE)
-/*******************************************************************************
-**
-** Function         hw_sco_config
-**
-** Description      Configure SCO related hardware settings
-**
-** Returns          None
-**
-*******************************************************************************/
-void hw_sco_config(void)
-{
-    if (SCO_INTERFACE_I2S == sco_bus_interface)
-    {
-        /* 'Enable' I2S mode */
-        bt_sco_i2spcm_param[0] = 1;
-
-        /* set nbs clock rate as the value in SCO_I2SPCM_IF_CLOCK_RATE field */
-        sco_bus_clock_rate = bt_sco_i2spcm_param[3];
-    }
-    else
-    {
-        /* 'Disable' I2S mode */
-        bt_sco_i2spcm_param[0] = 0;
-
-        /* set nbs clock rate as the value in SCO_PCM_IF_CLOCK_RATE field */
-        sco_bus_clock_rate = bt_sco_param[1];
-
-        /* sync up clock mode setting */
-        bt_sco_i2spcm_param[1] = bt_sco_param[4];
-    }
-
-    if (sco_bus_wbs_clock_rate == INVALID_SCO_CLOCK_RATE)
-    {
-        /* set default wbs clock rate */
-        sco_bus_wbs_clock_rate = SCO_I2SPCM_IF_CLOCK_RATE4WBS;
-
-        if (sco_bus_wbs_clock_rate < sco_bus_clock_rate)
-            sco_bus_wbs_clock_rate = sco_bus_clock_rate;
-    }
-
-    /*
-     *  To support I2S/PCM port multiplexing signals for sharing Bluetooth audio
-     *  and FM on the same PCM pins, we defer Bluetooth audio (SCO/eSCO)
-     *  configuration till SCO/eSCO is being established;
-     *  i.e. in hw_set_audio_state() call.
-     */
-
-#if (BLUETOOTH_HCI_USE_USB == TRUE)
-    /* Nothing specific is required for SCO connection, return SUCCESS */
-    if (bt_vendor_cbacks)
-	bt_vendor_cbacks->scocfg_cb(BT_VND_OP_RESULT_SUCCESS);
-    return;
-#endif
-}
-
-/*******************************************************************************
-**
-** Function         hw_sco_i2spcm_config
-**
-** Description      Configure SCO over I2S or PCM
-**
-** Returns          None
-**
-*******************************************************************************/
-static void hw_sco_i2spcm_config(void *p_mem, uint16_t codec)
-{
-    HC_BT_HDR *p_evt_buf = (HC_BT_HDR *)p_mem;
-    bt_vendor_op_result_t status = BT_VND_OP_RESULT_FAIL;
-
-    if (*((uint8_t *)(p_evt_buf + 1) + HCI_EVT_CMD_CMPL_STATUS_RET_BYTE) == 0)
-    {
-        status = BT_VND_OP_RESULT_SUCCESS;
-    }
-
-    /* Free the RX event buffer */
-    if (bt_vendor_cbacks)
-        bt_vendor_cbacks->dealloc(p_evt_buf);
-
-    if (status == BT_VND_OP_RESULT_SUCCESS)
-    {
-        HC_BT_HDR *p_buf = NULL;
-        uint8_t *p, ret;
-        uint16_t cmd_u16 = HCI_CMD_PREAMBLE_SIZE + SCO_I2SPCM_PARAM_SIZE;
-
-        if (bt_vendor_cbacks)
-            p_buf = (HC_BT_HDR *)bt_vendor_cbacks->alloc(BT_HC_HDR_SIZE + cmd_u16);
-
-        if (p_buf)
-        {
-            p_buf->event = MSG_STACK_TO_HC_HCI_CMD;
-            p_buf->offset = 0;
-            p_buf->layer_specific = 0;
-            p_buf->len = cmd_u16;
-
-            p = (uint8_t *)(p_buf + 1);
-
-            UINT16_TO_STREAM(p, HCI_VSC_WRITE_I2SPCM_INTERFACE_PARAM);
-            *p++ = SCO_I2SPCM_PARAM_SIZE;
-            if (codec == SCO_CODEC_CVSD)
-            {
-                bt_sco_i2spcm_param[2] = 0; /* SCO_I2SPCM_IF_SAMPLE_RATE  8k */
-                bt_sco_i2spcm_param[3] = bt_sco_param[1] = sco_bus_clock_rate;
-            }
-            else if (codec == SCO_CODEC_MSBC)
-            {
-                bt_sco_i2spcm_param[2] = wbs_sample_rate; /* SCO_I2SPCM_IF_SAMPLE_RATE 16K */
-                bt_sco_i2spcm_param[3] = bt_sco_param[1] = sco_bus_wbs_clock_rate;
-            }
-            else
-            {
-                bt_sco_i2spcm_param[2] = 0; /* SCO_I2SPCM_IF_SAMPLE_RATE  8k */
-                bt_sco_i2spcm_param[3] = bt_sco_param[1] = sco_bus_clock_rate;
-                ALOGE("wrong codec is use in hw_sco_i2spcm_config, goes default NBS");
-            }
-            memcpy(p, &bt_sco_i2spcm_param, SCO_I2SPCM_PARAM_SIZE);
-            cmd_u16 = HCI_VSC_WRITE_I2SPCM_INTERFACE_PARAM;
-            ALOGI("I2SPCM config {0x%x, 0x%x, 0x%x, 0x%x}",
-                    bt_sco_i2spcm_param[0], bt_sco_i2spcm_param[1],
-                    bt_sco_i2spcm_param[2], bt_sco_i2spcm_param[3]);
-
-            if ((ret = bt_vendor_cbacks->xmit_cb(cmd_u16, p_buf, hw_sco_i2spcm_cfg_cback)) == FALSE)
-            {
-                bt_vendor_cbacks->dealloc(p_buf);
-            }
-            else
-                return;
-        }
-        status = BT_VND_OP_RESULT_FAIL;
-    }
-
-    if (bt_vendor_cbacks)
-    {
-        bt_vendor_cbacks->audio_state_cb(status);
-    }
-}
-
-/*******************************************************************************
-**
-** Function         hw_set_SCO_codec
-**
-** Description      This functgion sends command to the controller to setup
-**                              WBS/NBS codec for the upcoming eSCO connection.
-**
-** Returns          -1 : Failed to send VSC
-**                   0 : Success
-**
-*******************************************************************************/
-static int hw_set_SCO_codec(uint16_t codec)
-{
-    HC_BT_HDR   *p_buf = NULL;
-    uint8_t     *p;
-    uint8_t     ret;
-    int         ret_val = 0;
-    tINT_CMD_CBACK p_set_SCO_codec_cback;
-
-    BTHWDBG( "hw_set_SCO_codec 0x%x", codec);
-
-    if (bt_vendor_cbacks)
-        p_buf = (HC_BT_HDR *)bt_vendor_cbacks->alloc(
-                BT_HC_HDR_SIZE + HCI_CMD_PREAMBLE_SIZE + SCO_CODEC_PARAM_SIZE);
-
-    if (p_buf)
-    {
-        p_buf->event = MSG_STACK_TO_HC_HCI_CMD;
-        p_buf->offset = 0;
-        p_buf->layer_specific = 0;
-        p = (uint8_t *)(p_buf + 1);
-
-        UINT16_TO_STREAM(p, HCI_VSC_ENABLE_WBS);
-
-        if (codec == SCO_CODEC_MSBC)
-        {
-            /* Enable mSBC */
-            *p++ = SCO_CODEC_PARAM_SIZE; /* set the parameter size */
-            UINT8_TO_STREAM(p,1); /* enable */
-            UINT16_TO_STREAM(p, codec);
-
-            /* set the totall size of this packet */
-            p_buf->len = HCI_CMD_PREAMBLE_SIZE + SCO_CODEC_PARAM_SIZE;
-
-            p_set_SCO_codec_cback = hw_set_MSBC_codec_cback;
-        }
-        else
-        {
-            /* Disable mSBC */
-            *p++ = (SCO_CODEC_PARAM_SIZE - 2); /* set the parameter size */
-            UINT8_TO_STREAM(p,0); /* disable */
-
-            /* set the totall size of this packet */
-            p_buf->len = HCI_CMD_PREAMBLE_SIZE + SCO_CODEC_PARAM_SIZE - 2;
-
-            p_set_SCO_codec_cback = hw_set_CVSD_codec_cback;
-            if ((codec != SCO_CODEC_CVSD) && (codec != SCO_CODEC_NONE))
-            {
-                ALOGW("SCO codec setting is wrong: codec: 0x%x", codec);
-            }
-        }
-
-        if ((ret = bt_vendor_cbacks->xmit_cb(HCI_VSC_ENABLE_WBS, p_buf, p_set_SCO_codec_cback))\
-              == FALSE)
-        {
-            bt_vendor_cbacks->dealloc(p_buf);
-            ret_val = -1;
-        }
-    }
-    else
-    {
-        ret_val = -1;
-    }
-
-    return ret_val;
-}
-
-/*******************************************************************************
-**
-** Function         hw_set_audio_state
-**
-** Description      This function configures audio base on provided audio state
-**
-** Paramters        pointer to audio state structure
-**
-** Returns          0: ok, -1: error
-**
-*******************************************************************************/
-int hw_set_audio_state(bt_vendor_op_audio_state_t *p_state)
-{
-    int ret_val = -1;
-
-    if (!bt_vendor_cbacks)
-        return ret_val;
-
-    ret_val = hw_set_SCO_codec(p_state->peer_codec);
-    return ret_val;
-}
-
-#else  // SCO_CFG_INCLUDED
-int hw_set_audio_state(bt_vendor_op_audio_state_t *p_state)
-{
-    return -256;
-}
-#endif
-/*******************************************************************************
-**
-** Function        hw_set_patch_file_path
-**
-** Description     Set the location of firmware patch file
-**
-** Returns         0 : Success
-**                 Otherwise : Fail
-**
-*******************************************************************************/
-int hw_set_patch_file_path(char *p_conf_name, char *p_conf_value, int param)
-{
-
-    strcpy(fw_patchfile_path, p_conf_value);
-
-    return 0;
-}
-
-/*******************************************************************************
-**
-** Function        hw_set_patch_file_name
-**
-** Description     Give the specific firmware patch filename
-**
-** Returns         0 : Success
-**                 Otherwise : Fail
-**
-*******************************************************************************/
-int hw_set_patch_file_name(char *p_conf_name, char *p_conf_value, int param)
-{
-
-    strcpy(fw_patchfile_name, p_conf_value);
-
-    return 0;
 }
 
 #if (VENDOR_LIB_RUNTIME_TUNING_ENABLED == TRUE)

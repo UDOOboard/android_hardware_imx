@@ -18,7 +18,7 @@
 
 /******************************************************************************
  *
- *  Filename:      bt_vendor_brcm.c
+ *  Filename:      bt_vendor_usb.c
  *
  *  Description:   Broadcom vendor specific library implementation
  *
@@ -27,7 +27,7 @@
 #define LOG_TAG "bt_vendor"
 
 #include <utils/Log.h>
-#include "bt_vendor_brcm.h"
+#include "bt_vendor_usb.h"
 #include "upio.h"
 #include "userial_vendor.h"
 
@@ -45,13 +45,11 @@
 **  Externs
 ******************************************************************************/
 
+void *memcpy(void *str1, const void *str2, size_t n);
 void hw_config_start(void);
 uint8_t hw_lpm_enable(uint8_t turn_on);
 uint32_t hw_lpm_get_idle_timeout(void);
 void hw_lpm_set_wake_state(uint8_t wake_assert);
-#if (SCO_CFG_INCLUDED == TRUE)
-void hw_sco_config(void);
-#endif
 void vnd_load_conf(const char *p_path);
 #if (HW_END_WITH_HCI_RESET == TRUE)
 void hw_epilog_process(void);
@@ -98,24 +96,6 @@ static int init(const bt_vendor_callbacks_t* p_cb, unsigned char *local_bdaddr)
         return -1;
     }
 
-#if (VENDOR_LIB_RUNTIME_TUNING_ENABLED == TRUE)
-    ALOGW("*****************************************************************");
-    ALOGW("*****************************************************************");
-    ALOGW("** Warning - BT Vendor Lib is loaded in debug tuning mode!");
-    ALOGW("**");
-    ALOGW("** If this is not intentional, rebuild libbt-vendor.so ");
-    ALOGW("** with VENDOR_LIB_RUNTIME_TUNING_ENABLED=FALSE and ");
-    ALOGW("** check if any run-time tuning parameters needed to be");
-    ALOGW("** carried to the build-time configuration accordingly.");
-    ALOGW("*****************************************************************");
-    ALOGW("*****************************************************************");
-#endif
-
-    userial_vendor_init();
-    upio_init();
-
-    vnd_load_conf(VENDOR_LIB_CONF_FILE);
-
     /* store reference to user callbacks */
     bt_vendor_cbacks = (bt_vendor_callbacks_t *) p_cb;
 
@@ -153,11 +133,8 @@ static int op(bt_vendor_opcode_t opcode, void *param)
 
         case BT_VND_OP_SCO_CFG:
             {
-#if (SCO_CFG_INCLUDED == TRUE)
-                hw_sco_config();
-#else
+                ALOGE("BT_VND_OP_SCO_CFG not supported on USB BT dongle");
                 retval = -1;
-#endif
             }
             break;
 
@@ -209,7 +186,7 @@ static int op(bt_vendor_opcode_t opcode, void *param)
 
          case BT_VND_OP_SET_AUDIO_STATE:
             {
-                retval = hw_set_audio_state((bt_vendor_op_audio_state_t *)param);
+                ALOGE("BT_VND_OP_SET_AUDIO_STATE not supported on USB BT dongle");
             }
             break;
 

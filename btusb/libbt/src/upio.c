@@ -32,7 +32,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <cutils/properties.h>
-#include "bt_vendor_brcm.h"
+#include "bt_vendor_usb.h"
 #include "upio.h"
 #include "userial_vendor.h"
 
@@ -112,6 +112,11 @@ static char *lpm_state[] = {
     "de-asserted",
     "asserted"
 };
+
+char *strerror(int errnum);
+int memcmp(const void *str1, const void *str2, size_t n);
+void *memset(void *str, int c, size_t n);
+int strcmp(const char *str1, const char *str2);
 
 /*****************************************************************************
 **   Bluetooth On/Off Static Functions
@@ -335,7 +340,7 @@ void upio_set(uint8_t pio, uint8_t action, uint8_t polarity)
         case UPIO_LPM_MODE:
             if (upio_state[UPIO_LPM_MODE] == action)
             {
-                UPIODBG("LPM is %s already", lpm_mode[action]);
+                ALOGE("LPM is %s already; polarity = %d", lpm_mode[action], polarity);
                 return;
             }
 
@@ -406,7 +411,7 @@ void upio_set(uint8_t pio, uint8_t action, uint8_t polarity)
         case UPIO_BT_WAKE:
             if (upio_state[UPIO_BT_WAKE] == action)
             {
-                UPIODBG("BT_WAKE is %s already", lpm_state[action]);
+                UPIODBG("BT_WAKE is %s already; polarity = %d", lpm_state[action], polarity);
 
 #if (BT_WAKE_VIA_PROC == TRUE)
                 if (lpm_proc_cb.btwrite_active == TRUE)
@@ -425,13 +430,7 @@ void upio_set(uint8_t pio, uint8_t action, uint8_t polarity)
 
             upio_state[UPIO_BT_WAKE] = action;
 
-#if (BT_WAKE_VIA_USERIAL_IOCTL == TRUE)
-
-            userial_vendor_ioctl( ( (action==UPIO_ASSERT) ? \
-                      USERIAL_OP_ASSERT_BT_WAKE : USERIAL_OP_DEASSERT_BT_WAKE),\
-                      NULL);
-
-#elif (BT_WAKE_VIA_PROC == TRUE)
+#if (BT_WAKE_VIA_PROC == TRUE)
 
             /*
              *  Kick proc btwrite node only at UPIO_ASSERT
@@ -479,7 +478,7 @@ void upio_set(uint8_t pio, uint8_t action, uint8_t polarity)
             }
 #endif
 
-            UPIODBG("proc btwrite assertion");
+            UPIODBG("proc btwrite assertion polarity = %d", polarity);
 
             if (fd >= 0)
                 close(fd);

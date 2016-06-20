@@ -31,7 +31,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
-#include "bt_vendor_brcm.h"
+#include "bt_vendor_usb.h"
 #include "userial.h"
 #include "userial_vendor.h"
 
@@ -138,7 +138,7 @@ void userial_ioctl_init_bt_wake(int fd)
     uint32_t bt_wake_state;
 
 #if (BT_WAKE_USERIAL_LDISC==TRUE)
-    int ldisc = N_BRCM_HCI; /* brcm sleep mode support line discipline */
+    int ldisc = N_USB_HCI; /* brcm sleep mode support line discipline */
 
     /* attempt to load enable discipline driver */
     if (ioctl(vnd_userial.fd, TIOCSETD, &ldisc) < 0)
@@ -300,76 +300,5 @@ void userial_vendor_close(void)
         ALOGE( "close(fd:%d) FAILED result:%d", vnd_userial.fd, result);
 
     vnd_userial.fd = -1;
-}
-
-/*******************************************************************************
-**
-** Function        userial_vendor_set_baud
-**
-** Description     Set new baud rate
-**
-** Returns         None
-**
-*******************************************************************************/
-void userial_vendor_set_baud(uint8_t userial_baud)
-{
-    uint32_t tcio_baud;
-
-    userial_to_tcio_baud(userial_baud, &tcio_baud);
-
-    cfsetospeed(&vnd_userial.termios, tcio_baud);
-    cfsetispeed(&vnd_userial.termios, tcio_baud);
-    tcsetattr(vnd_userial.fd, TCSANOW, &vnd_userial.termios);
-}
-
-/*******************************************************************************
-**
-** Function        userial_vendor_ioctl
-**
-** Description     ioctl inteface
-**
-** Returns         None
-**
-*******************************************************************************/
-void userial_vendor_ioctl(userial_vendor_ioctl_op_t op, void *p_data)
-{
-    switch(op)
-    {
-#if (BT_WAKE_VIA_USERIAL_IOCTL==TRUE)
-        case USERIAL_OP_ASSERT_BT_WAKE:
-            VNDUSERIALDBG("## userial_vendor_ioctl: Asserting BT_Wake ##");
-            ioctl(vnd_userial.fd, USERIAL_IOCTL_BT_WAKE_ASSERT, NULL);
-            break;
-
-        case USERIAL_OP_DEASSERT_BT_WAKE:
-            VNDUSERIALDBG("## userial_vendor_ioctl: De-asserting BT_Wake ##");
-            ioctl(vnd_userial.fd, USERIAL_IOCTL_BT_WAKE_DEASSERT, NULL);
-            break;
-
-        case USERIAL_OP_GET_BT_WAKE_STATE:
-            ioctl(vnd_userial.fd, USERIAL_IOCTL_BT_WAKE_GET_ST, p_data);
-            break;
-#endif  //  (BT_WAKE_VIA_USERIAL_IOCTL==TRUE)
-
-        default:
-            break;
-    }
-}
-
-/*******************************************************************************
-**
-** Function        userial_set_port
-**
-** Description     Configure UART port name
-**
-** Returns         0 : Success
-**                 Otherwise : Fail
-**
-*******************************************************************************/
-int userial_set_port(char *p_conf_name, char *p_conf_value, int param)
-{
-    strcpy(vnd_userial.port_name, p_conf_value);
-
-    return 0;
 }
 
