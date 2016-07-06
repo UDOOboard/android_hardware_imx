@@ -118,7 +118,11 @@
 #define PRODUCT_NAME_PROPERTY   "ro.product.name"
 #define PRODUCT_DEVICE_IMX      "imx"
 #define PRODUCT_DEVICE_AUTO     "udoo"
+#ifdef UDOONEO
+#define SUPPORT_CARD_NUM        2
+#else
 #define SUPPORT_CARD_NUM        3
+#endif
 #define VT1613_AUDIO_CARD_IDX   0
 #define ALC655_AUDIO_CARD_IDX   0
 #define HDMI_AUDIO_CARD_IDX     1
