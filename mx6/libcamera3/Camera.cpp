@@ -509,9 +509,7 @@ int32_t Camera::processSettings(sp<Metadata> settings, uint32_t frame)
     }
 
     int64_t timestamp = 0;
-    struct timespec ts;
-    clock_gettime(CLOCK_BOOTTIME, &ts);
-    timestamp = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+    timestamp = systemTime();
     settings->addInt64(ANDROID_SENSOR_TIMESTAMP, 1, &timestamp);
 
     settings->addUInt8(ANDROID_CONTROL_AE_STATE, 1, &m3aState.aeState);
@@ -574,6 +572,9 @@ void Camera::dumpDev(int32_t fd)
 
     dprintf(fd, "Number of streams: %d\n", mNumStreams);
     for (int32_t i = 0; i < mNumStreams; i++) {
+        if(mStreams[i] == NULL)
+            continue;
+
         dprintf(fd, "Stream %d/%d:\n", i, mNumStreams);
         mStreams[i]->dump(fd);
     }

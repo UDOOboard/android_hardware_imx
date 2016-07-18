@@ -1,6 +1,4 @@
 /*
- * Copyright (C) 2012 Freescale Semiconductor, Inc. All Rights Reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,6 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* Copyright (C) 2012,2016 Freescale Semiconductor, Inc. */
 
 #include "switchprofile.h"
 #define LOG_TAG "SWITCHPROFILE"
@@ -86,6 +85,10 @@ void SwitchprofileThread::do_changecpugov(const char *gov)
     else {
         mActive = false;
         mFd1 = open(INPUTBOOST_PATH, O_WRONLY);
+        if (mFd1 <= 0) {
+                ALOGE("Could not open cpu gov:%s", INPUTBOOST_PATH);
+                return;
+        }
         write(mFd1,"0",strlen("0"));
         close(mFd1);
     }
@@ -96,6 +99,10 @@ void SwitchprofileThread::do_changecpugov(const char *gov)
     if (mActive){
         do_setproperty(PROP_CPUFREQGOV, PROP_VAL);
         mFd1 = open(INPUTBOOST_PATH, O_WRONLY);
+        if (mFd1 <= 0) {
+                ALOGE("Could not open cpu gov:%s", INPUTBOOST_PATH);
+                return;
+        }
         write(mFd1,"1",strlen("1"));
         close(mFd1);
     }
