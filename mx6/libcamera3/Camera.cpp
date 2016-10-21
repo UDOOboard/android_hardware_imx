@@ -23,6 +23,7 @@
 #include <system/graphics.h>
 #include <utils/Mutex.h>
 #include <sys/stat.h>
+#include <time.h>
 #include "CameraHAL.h"
 #include "Metadata.h"
 #include "Stream.h"
@@ -41,6 +42,10 @@
 
 #define CAMERA_SYNC_TIMEOUT 5000 // in msecs
 
+// Undefine u8 since the camera_metadata_ro_entry_t contains a u8 field
+#ifdef u8
+    #undef u8
+#endif
 
 extern "C" {
 // Shim passed to the framework to close an opened device.
@@ -509,23 +514,47 @@ int32_t Camera::processSettings(sp<Metadata> settings, uint32_t frame)
     }
 
     int64_t timestamp = 0;
-    timestamp = systemTime();
+    struct timespec ts;
+    clock_gettime(CLOCK_BOOTTIME, &ts);
+    timestamp = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
     settings->addInt64(ANDROID_SENSOR_TIMESTAMP, 1, &timestamp);
 
     settings->addUInt8(ANDROID_CONTROL_AE_STATE, 1, &m3aState.aeState);
 
     // auto focus control.
-    m3aState.afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+    entry = settings->find(ANDROID_CONTROL_AF_TRIGGER);
+    if (entry.count > 0) {
+        // save trigger value
+        uint8_t trigger = entry.data.u8[0];
+
+        // get and save trigger ID
+        entry = settings->find(ANDROID_CONTROL_AF_TRIGGER_ID);
+        if (entry.count > 0)
+            m3aState.afTriggerId = entry.data.i32[0];
+
+        // process trigger type
+        switch (trigger) {
+            case ANDROID_CONTROL_AF_TRIGGER_START:
+		system("camerafocus");
+                m3aState.afState = ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
+                break;
+            case ANDROID_CONTROL_AF_TRIGGER_CANCEL:
+            case ANDROID_CONTROL_AF_TRIGGER_IDLE:
+                m3aState.afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+                break;
+            default:
+                ALOGE("unknown trigger: %d", trigger);
+                m3aState.afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+        }
+    } else {
+        m3aState.afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+    }
+
     settings->addUInt8(ANDROID_CONTROL_AF_STATE, 1, &m3aState.afState);
 
     // auto white balance control.
     m3aState.awbState = ANDROID_CONTROL_AWB_STATE_INACTIVE;
     settings->addUInt8(ANDROID_CONTROL_AWB_STATE, 1, &m3aState.awbState);
-
-    entry = settings->find(ANDROID_CONTROL_AF_TRIGGER_ID);
-    if (entry.count > 0) {
-        m3aState.afTriggerId = entry.data.i32[0];
-    }
 
     settings->addInt32(ANDROID_CONTROL_AF_TRIGGER_ID, 1, &m3aState.afTriggerId);
     settings->addInt32(ANDROID_CONTROL_AE_PRECAPTURE_ID, 1, &m3aState.aeTriggerId);

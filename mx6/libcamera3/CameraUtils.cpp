@@ -86,6 +86,10 @@ CaptureRequest::CaptureRequest()
 
 CaptureRequest::~CaptureRequest()
 {
+    if (mOutBuffers == NULL) {
+        return;
+    }
+
     for (uint32_t i = 0; i < mOutBuffersNumber; i++) {
         if (mOutBuffers[i] != NULL)
             delete mOutBuffers[i];
