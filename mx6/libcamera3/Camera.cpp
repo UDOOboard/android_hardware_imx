@@ -23,6 +23,7 @@
 #include <system/graphics.h>
 #include <utils/Mutex.h>
 #include <sys/stat.h>
+#include <time.h>
 #include "CameraHAL.h"
 #include "Metadata.h"
 #include "Stream.h"
@@ -40,7 +41,7 @@
 #include "VideoStream.h"
 
 #define CAMERA_SYNC_TIMEOUT 5000 // in msecs
-
+#define CAMERA_FOCUS_TIME 1000 // in msecs
 
 extern "C" {
 // Shim passed to the framework to close an opened device.
@@ -484,6 +485,13 @@ bool Camera::isValidReprocessSettings(const camera_metadata_t* /*settings*/)
     return false;
 }
 
+static double now_ms(void)
+{
+    struct timespec res;
+    clock_gettime(CLOCK_REALTIME, &res);
+    return 1000.0 * res.tv_sec + (double) res.tv_nsec / 1e6;
+}
+
 //do advanced character set.
 int32_t Camera::processSettings(sp<Metadata> settings, uint32_t frame)
 {
@@ -515,17 +523,27 @@ int32_t Camera::processSettings(sp<Metadata> settings, uint32_t frame)
     settings->addUInt8(ANDROID_CONTROL_AE_STATE, 1, &m3aState.aeState);
 
     // auto focus control.
-    m3aState.afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+    entry = settings->find(ANDROID_CONTROL_AF_TRIGGER);
+    if (entry.count > 0) {
+        double now = now_ms();
+        if (now > lastAfTime+CAMERA_FOCUS_TIME) {
+            lastAfTime = now;
+            ALOGW("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx %f", now_ms());
+            system("camerafocus &");
+            m3aState.afState = ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
+               //        m3aState.afState = doAutoFocus();
+        } else {
+            ALOGD("Camera AF ignored, time is %f", lastAfTime);
+	}
+    } else {
+        m3aState.afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+    }
+
     settings->addUInt8(ANDROID_CONTROL_AF_STATE, 1, &m3aState.afState);
 
     // auto white balance control.
     m3aState.awbState = ANDROID_CONTROL_AWB_STATE_INACTIVE;
     settings->addUInt8(ANDROID_CONTROL_AWB_STATE, 1, &m3aState.awbState);
-
-    entry = settings->find(ANDROID_CONTROL_AF_TRIGGER_ID);
-    if (entry.count > 0) {
-        m3aState.afTriggerId = entry.data.i32[0];
-    }
 
     settings->addInt32(ANDROID_CONTROL_AF_TRIGGER_ID, 1, &m3aState.afTriggerId);
     settings->addInt32(ANDROID_CONTROL_AE_PRECAPTURE_ID, 1, &m3aState.aeTriggerId);

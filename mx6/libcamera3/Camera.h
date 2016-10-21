@@ -61,6 +61,8 @@ protected:
     // Initialize static camera characteristics for individual device
     virtual status_t initSensorStaticData() = 0;
 
+    double lastAfTime = 0;
+
     virtual void setPreviewPixelFormat();
     virtual void setPicturePixelFormat();
 
