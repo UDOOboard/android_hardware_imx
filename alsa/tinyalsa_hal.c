@@ -39,15 +39,10 @@
 #include <audio_effects/effect_aec.h>
 
 #include "audio_hardware.h"
-#include "config_wm8962.h"
-#include "config_wm8958.h"
 #include "config_hdmi.h"
 #include "config_usbaudio.h"
 #include "config_nullcard.h"
 #include "config_spdif.h"
-#include "config_cs42888.h"
-#include "config_wm8960.h"
-#include "config_sii902x.h"
 #include "config_vt1613.h"
 #include "config_alc655.h"
 
@@ -117,17 +112,17 @@
 #define PRODUCT_DEVICE_PROPERTY "ro.product.device"
 #define PRODUCT_NAME_PROPERTY   "ro.product.name"
 #define PRODUCT_DEVICE_IMX      "imx"
-#define PRODUCT_DEVICE_AUTO     "udoo"
+#define PRODUCT_DEVICE_AUTO     "sabreauto"
 #ifdef UDOONEO
 #define SUPPORT_CARD_NUM        2
+#define HDMI_AUDIO_CARD_IDX     0
 #else
+#define AUDIO_CODEC_97
 #define SUPPORT_CARD_NUM        3
+#define HDMI_AUDIO_CARD_IDX     1
 #endif
 #define VT1613_AUDIO_CARD_IDX   0
 #define ALC655_AUDIO_CARD_IDX   0
-#define HDMI_AUDIO_CARD_IDX     1
-
-#define AUDIO_CODEC_97
 
 /*"null_card" must be in the end of this array*/
 struct audio_card *audio_card_list[SUPPORT_CARD_NUM] = {
