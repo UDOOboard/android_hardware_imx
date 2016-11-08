@@ -113,28 +113,40 @@
 #define PRODUCT_NAME_PROPERTY   "ro.product.name"
 #define PRODUCT_DEVICE_IMX      "imx"
 #define PRODUCT_DEVICE_AUTO     "sabreauto"
-#ifdef UDOONEO
-#define SUPPORT_CARD_NUM        2
-#define HDMI_AUDIO_CARD_IDX     0
-#else
+
+#ifdef UDOO // Quad/Dual
 #define AUDIO_CODEC_97
 #define SUPPORT_CARD_NUM        3
-#define HDMI_AUDIO_CARD_IDX     1
-#endif
 #define VT1613_AUDIO_CARD_IDX   0
-#define ALC655_AUDIO_CARD_IDX   0
-
-/*"null_card" must be in the end of this array*/
+#define HDMI_AUDIO_CARD_IDX     1
 struct audio_card *audio_card_list[SUPPORT_CARD_NUM] = {
-#ifdef UDOO
      &vt1613_card,
-#endif
-#ifdef A62
-     &alc655_card,
-#endif
      &hdmi_card,
-     &null_card,
+     &null_card, // "null_card" must be in the end of this array
 };
+#endif
+
+#ifdef UDOONEO
+#define SUPPORT_CARD_NUM        3
+#define HDMI_AUDIO_CARD_IDX     0
+struct audio_card *audio_card_list[SUPPORT_CARD_NUM] = {
+     &hdmi_card,
+     &usbaudio_card,
+     &null_card, // "null_card" must be in the end of this array
+};
+#endif
+
+#ifdef A62
+#define AUDIO_CODEC_97
+#define SUPPORT_CARD_NUM        3
+#define ALC655_AUDIO_CARD_IDX   0
+#define HDMI_AUDIO_CARD_IDX     1
+struct audio_card *audio_card_list[SUPPORT_CARD_NUM] = {
+     &alc655_card,
+     &hdmi_card,
+     &null_card, // "null_card" must be in the end of this array
+};
+#endif
 
 struct pcm_config pcm_config_mm_out = {
     .channels = 2,
@@ -181,7 +193,8 @@ const struct string_to_enum out_channels_name_to_enum_table[] = {
     STRING_TO_ENUM(AUDIO_CHANNEL_OUT_7POINT1),
 };
 
-static int out_dev_idx = (SUPPORT_CARD_NUM-1);
+static int out_dev_idx = 0;
+static int in_dev_idx = 0;
 
 /**
  * NOTE: when multiple mutexes have to be acquired, always respect the following order:
@@ -523,32 +536,25 @@ static int get_card_for_device(struct imx_audio_device *adev, int device, unsign
     unsigned int port = 0;
 
     if (flag == PCM_OUT ) {
-	card = adev->card_list[out_dev_idx]->card;
-    	pcmtest = pcm_open(card, port, PCM_OUT | PCM_MONOTONIC, &pcm_config_mm_out);
-	if (pcmtest && !pcm_is_ready(pcmtest)) {
+        card = adev->card_list[out_dev_idx]->card;
+        pcmtest = pcm_open(card, port, PCM_OUT | PCM_MONOTONIC, &pcm_config_mm_out);
+        if (pcmtest && !pcm_is_ready(pcmtest)) {
            ALOGE("Error in opening %d device: %s", out_dev_idx, pcm_get_error(pcmtest));
-	   card = NULL;
+           card = NULL;
 #ifdef UDOO
-           ALOGE("Falling back to VT1613_AUDIO_CARD_IDX (%d) device.", VT1613_AUDIO_CARD_IDX);
-	   card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
+           ALOGE("Falling back output to VT1613_AUDIO_CARD_IDX (%d) device.", VT1613_AUDIO_CARD_IDX);
+           card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
 #endif
 #ifdef A62
-           ALOGE("Falling back to ALC655_AUDIO_CARD_IDX (%d) device.", ALC655_AUDIO_CARD_IDX);
-	   card = adev->card_list[ALC655_AUDIO_CARD_IDX]->card;
+           ALOGE("Falling back output to ALC655_AUDIO_CARD_IDX (%d) device.", ALC655_AUDIO_CARD_IDX);
+           card = adev->card_list[ALC655_AUDIO_CARD_IDX]->card;
 #endif
-	}
+        }
         pcm_close(pcmtest);
         pcmtest = NULL;
     } else {
-	card = NULL;
-#ifdef UDOO
-	card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
-#endif
-#ifdef A62
-	card = adev->card_list[ALC655_AUDIO_CARD_IDX]->card;
-#endif
+        card = adev->card_list[in_dev_idx]->card;
     }
-
     return card;
 }
 
@@ -1665,17 +1671,16 @@ static int start_input_stream(struct imx_stream_in *in)
 
     pcmtest = pcm_open(card, port, PCM_IN, &pcm_config_mm_in);
     if (pcmtest && !pcm_is_ready(pcmtest)) {
-           ALOGE("Error in opening %d device: %s", adev->in_card_idx, pcm_get_error(pcmtest));
-	   card = NULL;
+        ALOGE("Error in opening %d device: %s", adev->in_card_idx, pcm_get_error(pcmtest));
+        card = NULL;
 #ifdef UDOO
-           ALOGE("Falling back to VT1613_AUDIO_CARD_IDX (%d) device.", VT1613_AUDIO_CARD_IDX);
-	   card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
+        ALOGE("Falling back input to VT1613_AUDIO_CARD_IDX (%d) device.", VT1613_AUDIO_CARD_IDX);
+        card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
 #endif
 #ifdef A62
-           ALOGE("Falling back to ALC655_AUDIO_CARD_IDX (%d) device.", ALC655_AUDIO_CARD_IDX);
-	   card = adev->card_list[ALC655_AUDIO_CARD_IDX]->card;
+        ALOGE("Falling back input to ALC655_AUDIO_CARD_IDX (%d) device.", ALC655_AUDIO_CARD_IDX);
+        card = adev->card_list[ALC655_AUDIO_CARD_IDX]->card;
 #endif
-           adev->in_card_idx = 0;
     }
     pcm_close(pcmtest);
     pcmtest = NULL;
@@ -1706,10 +1711,11 @@ static int start_input_stream(struct imx_stream_in *in)
         format     = adev_get_format_for_device(adev, in->device, PCM_IN);
         in->config.format  = format;
     }
+
 #ifdef AUDIO_CODEC_97
         rate = adev_get_rate_for_device(adev, in->device, PCM_IN); //vt1613-audio and alc655-audio card support ONLY 48000 Hz sample rate for Capture!
-        if( rate == 0) {
-              ALOGW("can not get rate for in_device %d ", in->device);
+        if (rate == 0) {
+              ALOGE("Can not get rate for in_device %d ", in->device);
               return -EINVAL;
         }
         in->config.rate = rate;
@@ -3253,13 +3259,7 @@ static int adev_get_rate_for_device(struct imx_audio_device *adev, uint32_t devi
 	if (flag == PCM_OUT) {
 		return adev->card_list[out_dev_idx]->out_rate;
 	} else {
-#ifdef UDOO
-		return adev->card_list[VT1613_AUDIO_CARD_IDX]->in_rate;
-#endif
-#ifdef A62
-		return adev->card_list[ALC655_AUDIO_CARD_IDX]->in_rate;
-#endif
-		return 0;
+		return adev->card_list[in_dev_idx]->in_rate;
 	}
 }
 
@@ -3268,13 +3268,7 @@ static int adev_get_channels_for_device(struct imx_audio_device *adev, uint32_t 
 	if (flag == PCM_OUT) {
 		return adev->card_list[out_dev_idx]->out_channels;
 	} else {
-#ifdef UDOO
-		return adev->card_list[VT1613_AUDIO_CARD_IDX]->in_rate;
-#endif
-#ifdef A62
-		return adev->card_list[ALC655_AUDIO_CARD_IDX]->in_rate;
-#endif
-		return 0;
+		return adev->card_list[in_dev_idx]->out_channels;
 	}
 }
 
@@ -3283,13 +3277,7 @@ static int adev_get_format_for_device(struct imx_audio_device *adev, uint32_t de
 	if (flag == PCM_OUT) {
 		return adev->card_list[out_dev_idx]->out_format;
 	} else {
-#ifdef UDOO
-		return adev->card_list[VT1613_AUDIO_CARD_IDX]->in_rate;
-#endif
-#ifdef A62
-		return adev->card_list[ALC655_AUDIO_CARD_IDX]->in_rate;
-#endif
-		return 0;
+		return adev->card_list[in_dev_idx]->out_format;
 	}
 }
 
@@ -3455,21 +3443,24 @@ static int adev_open(const hw_module_t* module, const char* name,
 
     property_get("persist.audio.device", audio_device, "imx-hdmi-soc");
 
-    if(!strcmp(audio_device, "imx-hdmi-soc"))
-    {
-	out_dev_idx = HDMI_AUDIO_CARD_IDX;
-	ALOGD("set hdmi audio device");
+    if(!strcmp(audio_device, "imx-hdmi-soc")) {
+        out_dev_idx = HDMI_AUDIO_CARD_IDX;
+        ALOGD("Selected HDMI audio device (output only)");
     }
-    else if(!strcmp(audio_device, "vt1613-audio"))
-    {
-	out_dev_idx = VT1613_AUDIO_CARD_IDX;
-	ALOGD("set onboard audio device");
+#ifdef UDOO
+    else if(!strcmp(audio_device, "vt1613-audio")) {
+        out_dev_idx = VT1613_AUDIO_CARD_IDX;
+        in_dev_idx = VT1613_AUDIO_CARD_IDX;
+        ALOGD("Selected onboard vt1613-audio device (input/output)");
     }
-    else if(!strcmp(audio_device, "alc655-audio"))
-    {
-	out_dev_idx = ALC655_AUDIO_CARD_IDX;
-	ALOGD("set onboard audio device");
+#endif
+#ifdef A62
+    else if(!strcmp(audio_device, "alc655-audio")) {
+        out_dev_idx = ALC655_AUDIO_CARD_IDX;
+        in_dev_idx = ALC655_AUDIO_CARD_IDX;
+        ALOGD("Selected onboard alc655-audio device (input/output)");
     }
+#endif
     adev = calloc(1, sizeof(struct imx_audio_device));
     if (!adev)
         return -ENOMEM;
