@@ -532,26 +532,9 @@ static void select_input_device(struct imx_audio_device *adev)
 static int get_card_for_device(struct imx_audio_device *adev, int device, unsigned int flag)
 {
     int card = -1;
-    struct pcm *pcmtest;
-    unsigned int port = 0;
 
     if (flag == PCM_OUT ) {
         card = adev->card_list[out_dev_idx]->card;
-        pcmtest = pcm_open(card, port, PCM_OUT | PCM_MONOTONIC, &pcm_config_mm_out);
-        if (pcmtest && !pcm_is_ready(pcmtest)) {
-           ALOGE("Error in opening %d device: %s", out_dev_idx, pcm_get_error(pcmtest));
-           card = NULL;
-#ifdef UDOO
-           ALOGE("Falling back output to VT1613_AUDIO_CARD_IDX (%d) device.", VT1613_AUDIO_CARD_IDX);
-           card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
-#endif
-#ifdef A62
-           ALOGE("Falling back output to ALC655_AUDIO_CARD_IDX (%d) device.", ALC655_AUDIO_CARD_IDX);
-           card = adev->card_list[ALC655_AUDIO_CARD_IDX]->card;
-#endif
-        }
-        pcm_close(pcmtest);
-        pcmtest = NULL;
     } else {
         card = adev->card_list[in_dev_idx]->card;
     }
@@ -1641,7 +1624,6 @@ static int start_input_stream(struct imx_stream_in *in)
 {
     int ret = 0;
     int i;
-    struct pcm *pcmtest;
     struct imx_audio_device *adev = in->dev;
     unsigned int card = -1;
     unsigned int port = 0;
@@ -1655,35 +1637,9 @@ static int start_input_stream(struct imx_stream_in *in)
         adev->in_device = in->device;
         select_input_device(adev);
     }
-
-    for(i = 0; i < MAX_AUDIO_CARD_NUM; i++) {
-        if(adev->in_device & adev->card_list[i]->supported_in_devices) {
-            card = adev->card_list[i]->card;
-            adev->in_card_idx = i;
-            port = 0;
-            break;
-        }
-        if(i == MAX_AUDIO_CARD_NUM-1) {
-            ALOGE("can not find supported device for %d",in->device);
-            return -EINVAL;
-        }
-    }
-
-    pcmtest = pcm_open(card, port, PCM_IN, &pcm_config_mm_in);
-    if (pcmtest && !pcm_is_ready(pcmtest)) {
-        ALOGE("Error in opening %d device: %s", adev->in_card_idx, pcm_get_error(pcmtest));
-        card = NULL;
-#ifdef UDOO
-        ALOGE("Falling back input to VT1613_AUDIO_CARD_IDX (%d) device.", VT1613_AUDIO_CARD_IDX);
-        card = adev->card_list[VT1613_AUDIO_CARD_IDX]->card;
-#endif
-#ifdef A62
-        ALOGE("Falling back input to ALC655_AUDIO_CARD_IDX (%d) device.", ALC655_AUDIO_CARD_IDX);
-        card = adev->card_list[ALC655_AUDIO_CARD_IDX]->card;
-#endif
-    }
-    pcm_close(pcmtest);
-    pcmtest = NULL;
+    
+    card = adev->card_list[in_dev_idx]->card;
+    adev->in_card_idx = in_dev_idx;
 
     /*Error handler for usb mic plug in/plug out when recording. */
     memcpy(&in->config, &pcm_config_mm_in, sizeof(pcm_config_mm_in));
@@ -1703,7 +1659,7 @@ static int start_input_stream(struct imx_stream_in *in)
 
         rate     = adev_get_rate_for_device(adev, in->device, PCM_IN);
         if( rate == 0) {
-              ALOGW("can not get rate for in_device %d ", in->device);
+              ALOGW("USB/digital: can not get rate for in_device %d ", in->device);
               return -EINVAL;
         }
         in->config.rate     =  rate;
@@ -1715,7 +1671,7 @@ static int start_input_stream(struct imx_stream_in *in)
 #ifdef AUDIO_CODEC_97
         rate = adev_get_rate_for_device(adev, in->device, PCM_IN); //vt1613-audio and alc655-audio card support ONLY 48000 Hz sample rate for Capture!
         if (rate == 0) {
-              ALOGE("Can not get rate for in_device %d ", in->device);
+              ALOGE("AC97: can not get rate for in_device %d ", in->device);
               return -EINVAL;
         }
         in->config.rate = rate;
@@ -1735,7 +1691,7 @@ static int start_input_stream(struct imx_stream_in *in)
     in->pcm = pcm_open(card, port, PCM_IN, &in->config);
     if (!pcm_is_ready(in->pcm)) {
         ALOGE("Device is busy. Cannot open pcm_in driver: %s", pcm_get_error(in->pcm));
-        ALOGE("Waiting 500 msec before next retries.");
+        ALOGE("Waiting 500 msec before next retry.");
         usleep(500000);
         pcm_close(in->pcm);
         /*workaround for some usb camera (V-UBM46). the issue is that:
@@ -3310,12 +3266,14 @@ static int scan_available_device(struct imx_audio_device *adev, bool rescanusb, 
         left_in_devices &= ~adev->card_list[i]->supported_in_devices;
     }
 
+    ALOGD("Scanning for available devices...");
+
     for (i = 0; i < MAX_AUDIO_CARD_SCAN ; i ++) {
         found = false;
         imx_control = control_open(i);
         if(!imx_control)
             break;
-        ALOGW("card %d, id %s ,driver %s, name %s", i, control_card_info_get_id(imx_control),
+        ALOGW("Found card %d, id %s, driver %s, name %s", i, control_card_info_get_id(imx_control),
                                                       control_card_info_get_driver(imx_control),
                                                       control_card_info_get_name(imx_control));
         for(j = 0; j < SUPPORT_CARD_NUM; j++) {
@@ -3395,7 +3353,7 @@ static int scan_available_device(struct imx_audio_device *adev, bool rescanusb, 
                     }
 #endif
 
-                    ALOGW("in rate %d, channels %d format %d",adev->card_list[n]->in_rate, adev->card_list[n]->in_channels, adev->card_list[n]->in_format);
+                    ALOGW("Card %d: found in rate %d, channels %d, format %d", n, adev->card_list[n]->in_rate, adev->card_list[n]->in_channels, adev->card_list[n]->in_format);
                 }
 
                 left_out_devices &= ~audio_card_list[j]->supported_out_devices;
